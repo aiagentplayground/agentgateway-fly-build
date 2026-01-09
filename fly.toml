@@ -1,4 +1,13 @@
 # fly.toml - Fly.io configuration for AgentGateway
+#
+# Ports:
+#   - External HTTPS :443 -> Internal :3000 (LLM Gateway)
+#   - External HTTP  :80  -> Redirects to HTTPS
+#
+# For MCP (port 3001), you can either:
+#   1. Use a separate Fly app
+#   2. Use fly proxy: fly proxy 3001:3001
+
 app = "agentgateway"
 primary_region = "iad"
 
@@ -12,7 +21,24 @@ primary_region = "iad"
   min_machines_running = 0
   processes = ["app"]
 
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+# Expose MCP port via Fly proxy (fly proxy 3001:3001)
+# Or add a second service for TCP:
+# [[services]]
+#   internal_port = 3001
+#   protocol = "tcp"
+#   [[services.ports]]
+#     port = 3001
+
 [[vm]]
   memory = "512mb"
   cpu_kind = "shared"
   cpus = 1
+
+[env]
+  # Non-sensitive env vars go here
+  # API keys should use: fly secrets set OPENAI_API_KEY=xxx

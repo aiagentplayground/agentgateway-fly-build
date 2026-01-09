@@ -15,20 +15,57 @@ fly auth login
 ./deploy.sh
 ```
 
+## Networking
+
+Fly.io handles TLS termination at the edge:
+
+| External | Internal | Purpose |
+|----------|----------|---------|
+| `https://your-app.fly.dev` (443) | Port 3000 | LLM Gateway (OpenAI/Anthropic) |
+| `http://your-app.fly.dev` (80) | Redirects to HTTPS | - |
+| `fly proxy 3001:3001` | Port 3001 | MCP Server Gateway |
+
+**Note:** You access everything via HTTPS. Fly.io automatically handles the TLS certificates.
+
+## Set API Keys
+
+```bash
+fly secrets set OPENAI_API_KEY=sk-xxx
+fly secrets set ANTHROPIC_API_KEY=sk-ant-xxx
+```
+
+## Test Your Deployment
+
+```bash
+# Test OpenAI
+curl -X POST https://agentgateway.fly.dev/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Hi"}]}'
+
+# Test Anthropic
+curl -X POST https://agentgateway.fly.dev/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{"model": "claude-sonnet-4-20250514", "max_tokens": 100, "messages": [{"role": "user", "content": "Hi"}]}'
+```
+
+See [TESTING.md](TESTING.md) for comprehensive testing guide with Python examples.
+
 ## Files
 
 | File | Description |
 |------|-------------|
 | `Dockerfile` | Container image that installs AgentGateway |
 | `fly.toml` | Fly.io deployment configuration |
-| `config.yaml` | AgentGateway configuration |
+| `config.yaml` | AgentGateway config (OpenAI, Anthropic, MCP) |
 | `deploy.sh` | Deployment helper script |
+| `TESTING.md` | LLM provider testing guide |
 
 ## Customization
 
 ### App Name
-
-Deploy with a custom app name:
 
 ```bash
 ./deploy.sh my-custom-gateway
@@ -36,7 +73,13 @@ Deploy with a custom app name:
 
 ### Configuration
 
-Edit `config.yaml` to customize AgentGateway behavior. See the [AgentGateway docs](https://github.com/agentgateway/agentgateway) for configuration options.
+Edit `config.yaml` to customize:
+- LLM providers (OpenAI, Anthropic, etc.)
+- MCP server backends
+- CORS policies
+- Rate limiting
+
+See [AgentGateway docs](https://agentgateway.dev/docs/) for all options.
 
 ### Resources
 
@@ -44,25 +87,28 @@ Adjust VM resources in `fly.toml`:
 
 ```toml
 [[vm]]
-  memory = "1gb"    # Increase memory
+  memory = "1gb"
   cpu_kind = "shared"
-  cpus = 2          # More CPUs
+  cpus = 2
 ```
 
-## Manual Deployment
+## Use with Claude Code
 
-If you prefer not to use the script:
+Point Claude Code at your gateway:
 
 ```bash
-fly apps create agentgateway
-fly deploy
+export ANTHROPIC_API_KEY="sk-ant-xxx"
+export ANTHROPIC_BASE_URL="https://agentgateway.fly.dev"
+claude
 ```
 
 ## Useful Commands
 
 ```bash
-fly logs -a agentgateway     # View logs
-fly status -a agentgateway   # Check status
-fly ssh console              # SSH into container
-fly destroy agentgateway     # Delete app
+fly logs -a agentgateway        # View logs
+fly status -a agentgateway      # Check status
+fly secrets list                # List secrets
+fly ssh console                 # SSH into container
+fly proxy 3001:3001             # Access MCP port locally
+fly destroy agentgateway        # Delete app
 ```
