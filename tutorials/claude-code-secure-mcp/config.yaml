@@ -1,0 +1,121 @@
+# AgentGateway Configuration for Claude Code
+# Features: LLM proxy, Secure MCP, Observability
+#
+# Ports:
+#   3000 - Anthropic API proxy (for Claude Code)
+#   3001 - MCP Gateway (JWT authenticated)
+#   15020 - Prometheus metrics
+
+config:
+  # OpenTelemetry tracing
+  tracing:
+    otlpEndpoint: http://otel-collector:4317
+    randomSampling: true
+
+binds:
+  # ============================================
+  # Anthropic API Proxy - Port 3000
+  # Claude Code connects here
+  # ============================================
+  - port: 3000
+    listeners:
+      - routes:
+          - policies:
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders:
+                  - content-type
+                  - authorization
+                  - anthropic-version
+                  - x-api-key
+            backends:
+              - ai:
+                  name: anthropic
+                  provider:
+                    anthropic: {}
+                  routes:
+                    /v1/messages: messages
+                    /v1/chat/completions: completions
+                    "*": passthrough
+
+  # ============================================
+  # Secure MCP Gateway - Port 3001
+  # JWT authentication required
+  # ============================================
+  - port: 3001
+    listeners:
+      - routes:
+          # Filesystem MCP Server (secured)
+          - path: /mcp/filesystem
+            policies:
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders:
+                  - content-type
+                  - authorization
+                  - mcp-protocol-version
+              # JWT Authentication
+              auth:
+                jwt:
+                  issuer: "claude-code-gateway"
+                  audience: "mcp-servers"
+                  # In production, use: file:./keys/jwt-public.pem
+                  # For dev, we use a shared secret (HS256)
+                  key: "env:MCP_JWT_SECRET"
+                  algorithm: "HS256"
+                # Authorization rules (CEL expressions)
+                rules:
+                  # Allow read operations
+                  - 'mcp.tool.name == "read_file"'
+                  - 'mcp.tool.name == "list_directory"'
+                  - 'mcp.tool.name == "search_files"'
+                  - 'mcp.tool.name == "get_file_info"'
+                  # Allow write for admin role only
+                  - 'jwt.role == "admin" && mcp.tool.name == "write_file"'
+                  # Block dangerous operations for everyone
+                  - 'mcp.tool.name != "delete_file"'
+                  - 'mcp.tool.name != "execute_command"'
+            backends:
+              - mcp:
+                  targets:
+                    - name: filesystem
+                      stdio:
+                        cmd: npx
+                        args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+
+          # Everything MCP Server (demo - less restricted)
+          - path: /mcp/everything
+            policies:
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders:
+                  - content-type
+                  - authorization
+                  - mcp-protocol-version
+              auth:
+                jwt:
+                  issuer: "claude-code-gateway"
+                  audience: "mcp-servers"
+                  key: "env:MCP_JWT_SECRET"
+                  algorithm: "HS256"
+            backends:
+              - mcp:
+                  targets:
+                    - name: everything
+                      stdio:
+                        cmd: npx
+                        args: ["-y", "@modelcontextprotocol/server-everything"]
+
+          # Health check (no auth)
+          - path: /health
+            policies: {}
+            backends:
+              - static:
+                  content: '{"status": "ok"}'
+                  contentType: "application/json"
+
+  # ============================================
+  # Metrics endpoint - Port 15020
+  # Prometheus scrapes this
+  # ============================================
+  # (Built-in, no config needed)

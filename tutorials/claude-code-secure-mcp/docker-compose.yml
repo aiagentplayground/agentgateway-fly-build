@@ -1,0 +1,140 @@
+# Claude Code + AgentGateway + Secure MCP + Observability
+#
+# Usage:
+#   export ANTHROPIC_API_KEY=sk-ant-xxx
+#   export MCP_JWT_SECRET=your-secret-min-32-chars-long!!
+#   docker-compose up -d
+#
+# Then configure Claude Code:
+#   export ANTHROPIC_BASE_URL=http://localhost:3000
+#   claude
+
+services:
+  # ============================================
+  # AgentGateway - Core proxy
+  # ============================================
+  agentgateway:
+    image: debian:bookworm-slim
+    container_name: agentgateway
+    command: >
+      bash -c "
+        apt-get update && apt-get install -y curl nodejs npm ca-certificates &&
+        curl -sL https://raw.githubusercontent.com/agentgateway/agentgateway/refs/heads/main/common/scripts/get-agentgateway | bash &&
+        ~/.agentgateway/bin/agentgateway -f /config/config.yaml
+      "
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - workspace:/workspace
+    ports:
+      - "3000:3000"   # Anthropic API proxy
+      - "3001:3001"   # MCP Gateway (secured)
+      - "15020:15020" # Prometheus metrics
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MCP_JWT_SECRET=${MCP_JWT_SECRET:-your-secret-key-min-32-characters!!}
+    depends_on:
+      - otel-collector
+    networks:
+      - gateway-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # OpenTelemetry Collector - Trace pipeline
+  # ============================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.91.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    networks:
+      - gateway-net
+
+  # ============================================
+  # Jaeger - Distributed tracing UI
+  # ============================================
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    container_name: jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "14268:14268" # Jaeger collector
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - gateway-net
+
+  # ============================================
+  # Prometheus - Metrics collection
+  # ============================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    networks:
+      - gateway-net
+
+  # ============================================
+  # Grafana - Dashboards
+  # ============================================
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: grafana
+    ports:
+      - "3002:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - gateway-net
+
+  # ============================================
+  # Token Generator - Helper service
+  # ============================================
+  token-generator:
+    image: node:20-slim
+    container_name: token-generator
+    working_dir: /app
+    command: >
+      bash -c "
+        npm install jsonwebtoken &&
+        node generate-token.js
+      "
+    volumes:
+      - ./generate-token.js:/app/generate-token.js:ro
+    environment:
+      - MCP_JWT_SECRET=${MCP_JWT_SECRET:-your-secret-key-min-32-characters!!}
+      - TOKEN_SUBJECT=${TOKEN_SUBJECT:-claude-code-user}
+      - TOKEN_ROLE=${TOKEN_ROLE:-user}
+    profiles:
+      - tools
+    networks:
+      - gateway-net
+
+networks:
+  gateway-net:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  workspace:
