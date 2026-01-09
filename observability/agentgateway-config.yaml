@@ -1,0 +1,48 @@
+# AgentGateway Configuration with Observability
+#
+# Features:
+#   - OpenAI LLM proxy on port 3000
+#   - Prometheus metrics on port 15020
+#   - OpenTelemetry tracing to Jaeger
+
+config:
+  tracing:
+    otlpEndpoint: http://otel-collector:4317
+    randomSampling: true
+
+binds:
+  # ===========================================
+  # LLM Gateway - Port 3000
+  # ===========================================
+  - port: 3000
+    listeners:
+      - routes:
+          - policies:
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders:
+                  - content-type
+                  - authorization
+                  - anthropic-version
+                  - x-api-key
+            backends:
+              # OpenAI Provider
+              - ai:
+                  name: openai
+                  provider:
+                    openAI: {}
+                  routes:
+                    /v1/chat/completions: completions
+                    /v1/completions: completions
+                    /v1/models: passthrough
+                    /v1/embeddings: passthrough
+                    "*": passthrough
+              # Anthropic Provider
+              - ai:
+                  name: anthropic
+                  provider:
+                    anthropic: {}
+                  routes:
+                    /v1/messages: messages
+                    /anthropic/v1/messages: messages
+                    "*": passthrough
